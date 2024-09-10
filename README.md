@@ -2,5 +2,6 @@
 
 
 # References
-https://www.chessprogramming.org/Bitboards \n
+https://www.chessprogramming.org/Bitboards
+
 https://www.pygame.org/docs/
