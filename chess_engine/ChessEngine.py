@@ -50,10 +50,12 @@ class GameState():
         # quick access to white/black king locations
         self.king_locations = {"white":(7,4), "black":(0,4)}
 
-        # determine if white/black kings have moved (for castling)
+        # determine if white/black kings have moved (for castling) as well as the turn this happened
         self.king_moved = {'w':(False, None), 'b':(False, None)}
-        # determine if the rooks have moved (for castling)
+        # determine if the rooks have moved (for castling) as well as the turn this happened
         self.rooks_moved = {'w':{'A':(False, None), 'H':(False, None)}, 'b':{'A':(False, None), 'H':(False, None)}}
+        # determine if rooks have been captured
+        self.rooks_captured = {'w':{'A':(False, None), 'H':(False, None)}, 'b':{'A':(False, None), 'H':(False, None)}}
 
 
         # stores the location of pinned pieces and checking pieces
@@ -64,14 +66,18 @@ class GameState():
         self.stalemate = False
         self.checkmate = False
 
-        # move counter
-        self.move_counter = 0
+        # store the most recently captured piece
+        self.captured_piece = "--"
     
     def get_all_moves(self):
         """
         gets all possible moves
         returns all the moves for the given turn as a list of Class Move
         """
+
+        # reset self.pinned and self.checking
+        self.pinned = []
+        self.checking = []
 
         # list to store moves
         moves = [] 
@@ -102,6 +108,10 @@ class GameState():
 
         # king is singly checked
         if king_checked:
+            
+            # get enemy and friendly colors
+            friendly_color = king_piece[0]
+            enemy_color = self.get_enemy(self.white_turn)
 
             # tuple representing the location of the piece checking the king
             checking_location = self.checking[0] 
@@ -116,19 +126,31 @@ class GameState():
             checking_direction_col = 0 if checking_col_magnitude == 0 else ((checking_location[1] - king_location[1]) / checking_col_magnitude)
 
             # boolean variables to determine if a piece can block the check
-            # pieces 1 square away from the king cannot be blocked
+            # pieces 1 square away from the king cannot be blocked and knights cannot be blocked
             piece_next_to_king = (checking_row_magnitude == 1 and checking_col_magnitude == 1) or (checking_row_magnitude == 1 and checking_col_magnitude == 0) or (checking_row_magnitude == 0 and checking_col_magnitude == 1)
             knight_checking = ((checking_row_magnitude == 1) and (checking_col_magnitude == 2)) or ((checking_row_magnitude == 2) and (checking_col_magnitude == 1))
 
             # the king must move or the checking piece must be captured
-            if piece_next_to_king or knight_checking:
+            if piece_next_to_king:
                 # loop through the moves in reverse and remove moves that won't resolve the check
                 for i in range(len(moves) - 1, -1, -1):
                     cur_move = moves[i]
 
-                    # if the current move does not capture the checking piece and it's not a king move, then remove it from the moves list
-                    if (not self.verify_move(cur_move, checking_location[0], checking_location[1])) and (cur_move.piece != king_piece):
-                        moves.pop(i)
+                    # if the current move does not capture the checking piece and it's not a valid king move, then remove it from the moves list
+                    if (not self.verify_move(cur_move, checking_location[0], checking_location[1])):
+                        if (cur_move.piece != king_piece): #and (self.square_under_attack((cur_move.to_row, cur_move.to_col), friendly_color, enemy_color, False)):
+                            moves.pop(i)
+
+            elif knight_checking:
+                # loop through the moves in reverse and remove moves that won't resolve the check
+                for i in range(len(moves) - 1, -1, -1):
+                    cur_move = moves[i]
+
+                    # the knight must be captured or the king must move
+                    if (not self.verify_move(cur_move, checking_location[0], checking_location[1])):
+                        if (cur_move.piece[1] != 'K'):
+                            moves.pop(i)
+                    
 
             # otherwise we can also block
             else:
@@ -137,7 +159,7 @@ class GameState():
                     cur_move = moves[i]
 
                     # king moves are acceptable
-                    if cur_move.piece == king_piece:
+                    if (cur_move.piece == king_piece): #and not (self.square_under_attack((cur_move.to_row, cur_move.to_col), friendly_color, enemy_color, False)):
                         continue
 
                     # a move that captures the checking piece is acceptable
@@ -328,8 +350,15 @@ class GameState():
         Takes a Move object as an input and makes the given move
         """
 
+        #print(move)
+
+        # store whose turn it is
+        turn = self.get_friendly(self.white_turn)
+        enemy_turn = self.get_enemy(self.white_turn)
+
         # store piece on "captured" square
-        captured_piece = self.board[move.to_row][move.to_col]
+        self.captured_piece = self.board[move.to_row][move.to_col]
+
 
         # first update the square where the piece is moving to
         self.board[move.to_row][move.to_col] = move.piece
@@ -344,11 +373,16 @@ class GameState():
 
         # handle en passant
         if move.en_passant:
+            self.captured_piece = self.board[move.from_row][move.to_col]
             self.board[move.from_row][move.to_col] = "--"
+        # otherwise we must remove the ability to en passant
+        else:
+            if self.en_passant[turn]["able"]:
+                self.en_passant[turn] = {"able":False, "column":None}
+
 
 
         # account for castling if a rook/king moves
-        turn = self.get_friendly(self.white_turn)
         # if the king is moving and the king hasn't already moved, then ensure the king can no longer castle
         # also store the move at which the king first move (for undoing moves later)
         if move.piece[1] == 'K':
@@ -356,14 +390,21 @@ class GameState():
                 self.king_moved[turn] = (True, self.move_counter)
 
         # similar for rooks
+        # left rooks are (7, 0) / (0, 0) for w/b, and right rooks are (7, 7) / (0, 7) for w/b
+        rook_types = {'w':[(7,0), (7,7)], 'b':[(0,0), (0,7)]}
         if move.piece[1] == 'R':
-            # left rooks are (7, 0) / (0, 0) for w/b, and right rooks are (7, 7) / (0, 7) for w/b
-            rook_types = {'w':[(7,0), (7,7)], 'b':[(0,0), (0,7)]}
             if (move.from_row, move.from_col) in rook_types[turn]:
                 if (move.from_col == 0) and not self.rooks_moved[turn]['A']:
-                    self.rooks_moved[turn]['A'] = True
+                    self.rooks_moved[turn]['A'] = (True, self.move_counter)
                 if (move.from_col == 7) and not self.rooks_moved[turn]['H']:
-                    self.rooks_moved[turn]['H'] = True
+                    self.rooks_moved[turn]['H'] = (True, self.move_counter)
+        
+        # account for castling if a rook is captured
+        if (move.to_row, move.to_col) in rook_types[enemy_turn]:
+            if (move.to_col == 0) and not self.rooks_captured[enemy_turn]['A'][0]:
+                self.rooks_captured[enemy_turn]['A'] = (True, self.move_counter)
+            if (move.to_col == 7) and not self.rooks_captured[enemy_turn]['H'][0]:
+                self.rooks_captured[enemy_turn]['H'] = (True, self.move_counter)
             
         # handle castling
         if move.castling[0]:
@@ -391,7 +432,7 @@ class GameState():
 
 
         # updates move_log
-        self.move_log.append((move, captured_piece))
+        self.move_log.append((move, self.captured_piece))
 
         
         # update king location if the king moves
@@ -404,11 +445,6 @@ class GameState():
         # swap turns
         self.white_turn = not self.white_turn
 
-
-        # reset self.pinned and self.checking
-        self.pinned = []
-        self.checking = []
-
         # update move counter
         self.move_counter = len(self.move_log)
 
@@ -417,10 +453,16 @@ class GameState():
         Undo moves based on the move log
         """
 
+        #print("undo move")
+
+        friendly_color = self.get_friendly(self.white_turn)
+        enemy_color = self.get_enemy(self.white_turn)
+
         move_log = self.move_log
         move_count = self.move_counter
 
         current_move_idx = move_count - 1
+        previous_move_idx = move_count - 2
 
         # reset self.pinned and self.checking
         self.pinned = []
@@ -438,36 +480,61 @@ class GameState():
         current_move = move_log[current_move_idx][0]
         captured_piece = move_log[current_move_idx][1]
 
+        # gather the previous move
+        previous_move = move_log[previous_move_idx][0]
+
 
         # reverse the move
         self.board[current_move.from_row][current_move.from_col] = current_move.piece
-        self.board[current_move.to_row][current_move.to_col] = captured_piece
+        
 
         # en passant reversal
         if current_move.pawn_advanced_2:
-            enemy_color = self.get_enemy(self.white_turn)
             self.en_passant[enemy_color] = {"able":False, "column":None}
+        if previous_move.pawn_advanced_2:
+            self.en_passant[enemy_color] = {"able":True, "column":previous_move.to_col}
         if current_move.en_passant:
-            self.board[current_move.from_row][current_move.to_col] = enemy_color + 'P'
+            # add back captured piece
+            self.board[current_move.from_row][current_move.to_col] = friendly_color + 'P'
+            # remove capturing pawn
+            self.board[current_move.to_row][current_move.to_col] = "--"
+            # establish that en passant is possible again
+            self.en_passant[friendly_color] = {"able":True, "column":current_move.to_col}
+
+        # otherwise reverse the captured piece
+        else:
+            self.board[current_move.to_row][current_move.to_col] = captured_piece
 
 
         # castling reversal
         turn = self.get_friendly(self.white_turn)
+        enemy_turn = self.get_enemy(self.white_turn)
         # first undo whether the king has moved
         if current_move.piece[1] == 'K':
             # determine if we're undoing the move when the king first moved
             if self.king_moved[turn][0] and current_move_idx == self.king_moved[turn][1]:
                 self.king_moved[turn] = (False, None)
-        
+
+        # left rooks are (7, 0) / (0, 0) for w/b, and right rooks are (7, 7) / (0, 7) for w/b
+        rook_types = {'w':[(7,0), (7,7)], 'b':[(0,0), (0,7)]}
         # rook flags
-        if current_move.piece[1] == 'R':
-            # left rooks are (7, 0) / (0, 0) for w/b, and right rooks are (7, 7) / (0, 7) for w/b
-            rook_types = {'w':[(7,0), (7,7)], 'b':[(0,0), (0,7)]}
-            if (current_move.from_row, current_move.from_col) in rook_types[turn]:
-                if (current_move.from_col == 0) and self.rooks_moved[turn]['A'] and self.rooks_moved[turn]['A'][1] == current_move_idx:
-                    self.rooks_moved[turn]['A'] = False
-                if (current_move.from_col == 7) and self.rooks_moved[turn]['H'] and self.rooks_moved[turn]['H'][1] == current_move_idx:
-                    self.rooks_moved[turn]['H'] = False
+        if (current_move.from_row, current_move.from_col) in rook_types[enemy_turn]:
+            # undoing a rook moving for the first time
+            if current_move.piece[1] == 'R':
+                if (current_move.from_col == 0) and self.rooks_moved[turn]['A'][0] and self.rooks_moved[turn]['A'][1] == current_move_idx:
+                    self.rooks_moved[turn]['A'] = (False, current_move_idx)
+                if (current_move.from_col == 7) and self.rooks_moved[turn]['H'][0] and self.rooks_moved[turn]['H'][1] == current_move_idx:
+                    self.rooks_moved[turn]['H'] = (False, current_move_idx)
+            # undo a rook being captured
+        if (current_move.to_row, current_move.to_col) in rook_types[enemy_turn]:
+                a = current_move.to_col == 0
+                b = self.rooks_captured[enemy_turn]['A'][0]
+                c = self.rooks_moved[enemy_turn]['A'][1] == current_move_idx
+                if (current_move.to_col == 0) and self.rooks_captured[enemy_turn]['A'][0] and self.rooks_captured[enemy_turn]['A'][1] == current_move_idx:
+                    self.rooks_captured[enemy_turn]['A'] = (False, current_move_idx)
+                if (current_move.to_col == 0) and self.rooks_captured[enemy_turn]['H'][0] and self.rooks_captured[enemy_turn]['H'][1] == current_move_idx:
+                    self.rooks_captured[enemy_turn]['A'] = (False, current_move_idx)
+                
 
         # undo rook movements
         if current_move.castling[0]:
@@ -572,12 +639,13 @@ class GameState():
         
 
         # evaluate the two squares on either side of the king
-
+        # squares must be open and not under attack on the given side of the king, rooks must not have moved, and rooks must not have been captured
         # A-side (queen side)
         if not self.square_under_attack((row, col-1), friendly_color, enemy_color, False) \
            and not self.square_under_attack((row, col-2), friendly_color, enemy_color, False) \
            and not self.rooks_moved[friendly_color]['A'][0] \
-           and self.squares_open(row, 'A'):
+           and self.squares_open(row, 'A') \
+           and not self.rooks_captured[friendly_color]['A'][0]:
             # store the castling move
             moves.append(Move(piece, row, col, row, col-2, castling=[True, 'A']))
         
@@ -585,7 +653,8 @@ class GameState():
         if not self.square_under_attack((row, col+1), friendly_color, enemy_color, False) \
            and not self.square_under_attack((row, col+2), friendly_color, enemy_color, False) \
            and not self.rooks_moved[friendly_color]['H'][0] \
-           and self.squares_open(row, 'H'):
+           and self.squares_open(row, 'H') \
+           and not self.rooks_captured[friendly_color]['H'][0]:
             # store the castling move
             moves.append(Move(piece, row, col, row, col+2, castling=[True, 'H']))
 
@@ -624,15 +693,19 @@ class GameState():
         square1 = (square[0] + attacking_vector[friendly_piece_color][0][0], square[1] + attacking_vector[friendly_piece_color][0][1])
         square2 = (square[0] + attacking_vector[friendly_piece_color][1][0], square[1] + attacking_vector[friendly_piece_color][1][1])
 
-        if (self.board[square1[0]][square1[1]] == enemy_piece_color + 'P'):
-            if square_is_king:
-                self.checking.append(square1)
-            return True
+        # ensure the possible squares are within bounds
+        
+        if (0 <= square1[0] < 8) and (0 <= square1[1] < 8):
+            if (self.board[square1[0]][square1[1]] == enemy_piece_color + 'P'):
+                if square_is_king:
+                    self.checking.append(square1)
+                return True
 
-        if (self.board[square2[0]][square2[1]] == enemy_piece_color + 'P'):
-            if square_is_king:
-                self.checking.append(square2)
-            return True
+        if (0 <= square2[0] < 8) and (0 <= square2[1] < 8):
+            if (self.board[square2[0]][square2[1]] == enemy_piece_color + 'P'):
+                if square_is_king:
+                    self.checking.append(square2)
+                return True
             
         return False
 
@@ -649,7 +722,7 @@ class GameState():
             cur_square = (square[0] + vector[0], square[1] + vector[1])
             # ensure the square is on the board
             if (0 <= cur_square[0] < 8) and (0 <= cur_square[1] < 8):
-                if (self.board[cur_square[0]][cur_square[1]][0] == enemy_piece_color + 'N'):
+                if (self.board[cur_square[0]][cur_square[1]] == enemy_piece_color + 'N'):
                     if square_is_king:
                         self.checking.append(cur_square)
                     return True
@@ -776,25 +849,37 @@ class GameState():
 
                 # if the piece is a friendly piece, then add it as a potential pin
                 if (self.board[cur_square[0]][cur_square[1]][0] == friendly_piece_color):
+                    # ensure the friendly piece is not the king itself
+                    if self.board[cur_square[0]][cur_square[1]][1] == 'K':
+                        cur_square = (cur_square[0] + vector[0], cur_square[1] + vector[1])
+                        continue
                     potential_pin.append(cur_square)
+                    # if there are two potential pins, then we have neither a pin nor a check
+                    if len(potential_pin) > 1:
+                        break
+
                     cur_square = (cur_square[0] + vector[0], cur_square[1] + vector[1])
 
-                # if it's an enemy piece, then add it as a potential checking piece
-                elif (self.board[cur_square[0]][cur_square[1]] == enemy_piece):
-                    potential_check.append(cur_square)
+                # if it's an enemy piece, then consider it as a potential checking piece
+                elif (self.board[cur_square[0]][cur_square[1]][0] == enemy_piece[0]):
+                    # only add the enemy piece as a potential check if it is enemy_piece
+                    if self.board[cur_square[0]][cur_square[1]] == enemy_piece:
+                        potential_check.append(cur_square)
                     # no reason to check more squares
                     break
                 
                 # otherwise move to the next square
                 else:
                     cur_square = (cur_square[0] + vector[0], cur_square[1] + vector[1])
-
+            
+            """
             # if the length of potential_pin > 1 then this means there are no pins nor are there any checks along that direction
             if len(potential_pin) > 1: 
                 continue
+            """
 
-            elif len(potential_check) == 1:
-                # potential check and one potential pin means the piece IS pinned
+            if len(potential_check) == 1:
+                # potential check and one potential pin means the piece IS pinned so long 
                 if len(potential_pin) == 1:
                     if square_is_king:
                         self.pinned.append(potential_pin[0])
@@ -882,16 +967,13 @@ class GameState():
         move_col = Move.to_col
 
         if (move_row == to_row) and (move_col == to_col):
-
-            # if the capturing piece is a king then we must ensure the checking piece isn't defended
-            if Move.piece[1] == 'K':
-                return True
+            return True
         
         return False
 
     def blocking_move(self, Move, king_location, checking_row_magnitude, checking_col_magnitude, checking_direction_row, checking_direction_col):
         """
-        Determines if a move blocks a check on the king
+        Returns True if the piece blocks the check
         """
 
         move_row = Move.to_row
@@ -921,6 +1003,15 @@ class GameState():
         
         return True
 
+
+    def count_pieces(self):
+        count = 0
+        for row in range(NUM_ROWS):
+            for col in range(NUM_COLS):
+                if self.board[row][col] != "--":
+                    count += 1
+        
+        return count
 
 
 
@@ -965,6 +1056,17 @@ class Move():
         """
 
         return f"{self.piece} moves from ({self.from_row}, {self.from_col}) to ({self.to_row}, {self.to_col})"
+    
+    def chess_notation(self):
+        """
+        Outputs chess notation for a move
+        """
+
+        row_to_rank = {0:"8", 1:"7", 2:"6", 3:"5", 4:"4", 5:"3", 6:"2", 7:"1"} # converts row to rank
+        col_to_file = {0:"a", 1:"b", 2:"c", 3:"d", 4:"e", 5:"f", 6:"g", 7:"h"}
+
+        return self.piece[1] + col_to_file[self.to_col] + row_to_rank[self.to_row]
+
 
 
 """
@@ -981,4 +1083,8 @@ while exploring along bishop/rook directions, can also check for pawns/king
 self.king_location should just have 'w' rather than 'white'
 
 after undoing a move, the engine will need to recalculate possible moves which is inefficient
+
+use previous move in undo_move to undo a rook/king moving affecting castling
+
+store entire game states and undo a move by reverting to a previous state
 """
