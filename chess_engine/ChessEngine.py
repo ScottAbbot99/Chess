@@ -66,6 +66,9 @@ class GameState():
         self.stalemate = False
         self.checkmate = False
 
+        # store if castling is possible
+        self.castling_moves = {'w':{'A':False, 'H':False}, 'b':{'A':False, 'H':False}}
+
         # store the most recently captured piece
         self.captured_piece = "--"
     
@@ -115,6 +118,8 @@ class GameState():
 
             # tuple representing the location of the piece checking the king
             checking_location = self.checking[0] 
+            # piece checking the king
+            checking_piece = self.board[checking_location[0]][checking_location[1]][1]
 
             # obtain a vector from the king to the checking piece
             checking_vector = (checking_location[0] - king_location[0], checking_location[1] - king_location[1])
@@ -135,6 +140,12 @@ class GameState():
                 # loop through the moves in reverse and remove moves that won't resolve the check
                 for i in range(len(moves) - 1, -1, -1):
                     cur_move = moves[i]
+
+                    # en passant can also capture a checking pawn
+                    if cur_move.en_passant:
+                        if checking_piece == 'P':
+                            if checking_location[1] == cur_move.to_col:
+                                continue
 
                     # if the current move does not capture the checking piece and it's not a valid king move, then remove it from the moves list
                     if (not self.verify_move(cur_move, checking_location[0], checking_location[1])):
@@ -208,6 +219,21 @@ class GameState():
                     if (new_slope != piece_to_king_slope):
                         moves.pop(i)
 
+
+        # loop through all moves and update whether white/black can castle
+        remove_queenside = True
+        remove_kingside = True
+        for move in moves:
+            # if there is a castling move, Falsify the remove switch
+            if move.castling[0]:
+                if move.castling[1] == 'A':
+                    remove_queenside = False
+                else:
+                    remove_kingside = False
+        if remove_queenside:
+            self.castling_moves[self.get_friendly(self.white_turn)]['A'] = False
+        if remove_kingside:
+            self.castling_moves[self.get_friendly(self.white_turn)]['H'] = False
 
         return moves
 
@@ -647,6 +673,7 @@ class GameState():
            and self.squares_open(row, 'A') \
            and not self.rooks_captured[friendly_color]['A'][0]:
             # store the castling move
+            self.castling_moves[friendly_color]['A'] = True
             moves.append(Move(piece, row, col, row, col-2, castling=[True, 'A']))
         
         # H-side (king side)
@@ -656,6 +683,7 @@ class GameState():
            and self.squares_open(row, 'H') \
            and not self.rooks_captured[friendly_color]['H'][0]:
             # store the castling move
+            self.castling_moves[friendly_color]['H'] = True
             moves.append(Move(piece, row, col, row, col+2, castling=[True, 'H']))
 
     def squares_open(self, row, side):
@@ -910,7 +938,63 @@ class GameState():
                     col_diff = col - en_passant["column"]
                     if np.abs(col_diff) == 1:
                         
-                        # the move is legal
+                        # the move is legal so long as the king won't be in check afterwards
+                        if self.king_locations['white'][0] == 3:
+
+
+
+                            king_col = self.king_locations['white'][1]
+
+
+                            # king is to the left of the pawns
+                            if king_col < col:
+                                
+                                # blocker on the inside
+                                inside_start = king_col + 1
+                                inside_end = min(col, en_passant["column"])
+                                for i in range(inside_start, inside_end):
+                                    if self.board[row][i] != "--":
+                                        # there's a blocker so en passant is possible
+                                        moves.append(Move(piece, row, col, row - 1, en_passant["column"], True))
+                                        return
+
+                                # determine if there's a rook or queen beyond the pawns
+                                outside_start = max(col, en_passant["column"]) + 1
+                                for i in range(outside_start, 8):
+                                    # there's an attacker with no blocker so en passant is not possible
+                                    if self.board[row][i] == ("bR" or "bQ"):
+                                        return
+                                    # there's a blocker
+                                    elif self.board[row][i] != "--":
+                                        moves.append(Move(piece, row, col, row - 1, en_passant["column"], True))
+                                        return
+                            
+
+                            # king is to the right of the pawns
+                            if king_col > col:
+
+                                # blocker on the inside
+                                inside_start = king_col - 1
+                                inside_end = max(col, en_passant["column"])
+                                for i in range(inside_start, inside_end, -1):
+                                    if self.board[row][i] != "--":
+                                        # there's a blocker so en passant is possible
+                                        moves.append(Move(piece, row, col, row - 1, en_passant["column"], True))
+                                        return
+
+                                # determine if there's a rook or queen beyond the pawns
+                                outside_start = min(col, en_passant["column"]) - 1
+                                for i in range(outside_start, -1, -1):
+                                    print(self.board[row][i])
+                                    # there's an attacker with no blocker so en passant is not possible
+                                    if self.board[row][i] == ("bR" or "bQ"):
+                                        return
+                                    # there's a blocker
+                                    elif self.board[row][i] != "--":
+                                        moves.append(Move(piece, row, col, row - 1, en_passant["column"], True))
+                                        return
+
+
                         moves.append(Move(piece, row, col, row - 1, en_passant["column"], True))
         
         if piece[0] == 'b':
@@ -925,8 +1009,63 @@ class GameState():
                     # the given pawn must be directly next to the pawn that advanced two
                     col_diff = col - en_passant["column"]
                     if np.abs(col_diff) == 1:
-                        
-                        # the move is legal
+
+                        # the move is legal so long as the king won't be in check afterwards
+                        if self.king_locations['black'][0] == 4:
+
+
+                            king_col = self.king_locations['black'][1]
+
+
+                            # king is to the left of the pawns
+                            if king_col < col:
+                                
+                                # blocker on the inside
+                                inside_start = king_col + 1
+                                inside_end = min(col, en_passant["column"])
+                                for i in range(inside_start, inside_end):
+                                    if self.board[row][i] != "--":
+                                        # there's a blocker so en passant is possible
+                                        moves.append(Move(piece, row, col, row + 1, en_passant["column"], True))
+                                        return
+
+                                # determine if there's a rook or queen beyond the pawns
+                                outside_start = max(col, en_passant["column"]) + 1
+                                for i in range(outside_start, 8):
+                                    # there's an attacker with no blocker so en passant is not possible
+                                    if self.board[row][i] == ("wR" or "wQ"):
+                                        return
+                                    # there's a blocker
+                                    elif self.board[row][i] != "--":
+                                        moves.append(Move(piece, row, col, row + 1, en_passant["column"], True))
+                                        return
+                            
+
+                            # king is to the right of the pawns
+                            if king_col > col:
+
+                                # blocker on the inside
+                                inside_start = king_col - 1
+                                inside_end = max(col, en_passant["column"])
+                                for i in range(inside_start, inside_end, -1):
+                                    if self.board[row][i] != "--":
+                                        # there's a blocker so en passant is possible
+                                        moves.append(Move(piece, row, col, row + 1, en_passant["column"], True))
+                                        return
+
+                                # determine if there's a rook or queen beyond the pawns
+                                outside_start = min(col, en_passant["column"]) - 1
+                                for i in range(outside_start, -1, -1):
+                                    print(self.board[row][i])
+                                    # there's an attacker with no blocker so en passant is not possible
+                                    if self.board[row][i] == ("wR" or "wQ"):
+                                        return
+                                    # there's a blocker
+                                    elif self.board[row][i] != "--":
+                                        moves.append(Move(piece, row, col, row + 1, en_passant["column"], True))
+                                        return
+
+
                         moves.append(Move(piece, row, col, row + 1, en_passant["column"], True))
 
 

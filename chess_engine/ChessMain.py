@@ -1,10 +1,12 @@
 import numpy as np
 import ChessEngine
-from ChessAI import player_move, random_move, greedy_algorithm, minimax
+from ChessAI import player_move, random_move, greedy_algorithm, minimax, minimax_stockfish, minimax_combined
 import pygame as p
 from constants import HEIGHT, WIDTH, NUM_ROWS, NUM_COLS, SQUARE_SIZE, MAX_FPS, IMAGES, MOVE_LOG_HEIGHT, MOVE_LOG_WIDTH
 import time
 import copy
+from eval_model import ChessModel
+import torch
 
 # initialize pygame
 p.init()
@@ -79,7 +81,7 @@ def animate_move(move, screen, clock, game_state):
         # draw captured piece onto rectangle
         if game_state.captured_piece != "--":
             if move.en_passant:
-                en_passant_row = 3 if move.piece[0] == 'w' else 5
+                en_passant_row = 3 if move.piece[0] == 'w' else 4
                 end_square = p.Rect(move.to_col * SQUARE_SIZE, en_passant_row * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE)
             screen.blit(IMAGES[game_state.captured_piece], end_square)
         
@@ -97,11 +99,23 @@ def main():
     move_log_font = p.font.SysFont("Arial", 12, False, False)
     load_images()
 
+
+    # set model architecture
+    board_size = 64
+    scalar_size = 6
+    hidden_size = [128, 64]
+    model = ChessModel(board_size, scalar_size, hidden_size)
+
+    # load model and set to eval mode
+    model.load_state_dict(torch.load("chess_model.pth"))
+    model.eval()
+
+
     running = True 
 
     click = dict.fromkeys(["first_square", "first_piece"]) # dictionary to store square and piece clicked
 
-    players = {True:"person", False:"person"} # True represents the white player and False represents the black player
+    players = {True:"minimax", False:"person"} # True represents the white player and False represents the black player
 
     while running:
         
@@ -151,6 +165,26 @@ def main():
                     game_state_copy = copy.deepcopy(game_state)
                     turn = 1 if game_state.white_turn else -1
                     move, value = minimax(game_state_copy, True, turn)
+                    print(value)
+                    game_state.apply_move(move)
+
+                    animate_move(move, screen, clock, game_state)
+
+                # minimax with stockfish evaluation prediction
+                elif players[game_state.white_turn] == "minimax_stockfish":
+                    game_state_copy = copy.deepcopy(game_state)
+                    turn = 1 if game_state.white_turn else -1
+                    move, value = minimax_stockfish(game_state_copy, True, turn, model, depth=3)
+                    print(value)
+                    game_state.apply_move(move)
+
+                    animate_move(move, screen, clock, game_state)
+
+                # minimax with stockfish evaluation prediction
+                elif players[game_state.white_turn] == "minimax_combined":
+                    game_state_copy = copy.deepcopy(game_state)
+                    turn = 1 if game_state.white_turn else -1
+                    move, value = minimax_combined(game_state_copy, True, turn, model, depth=3)
                     print(value)
                     game_state.apply_move(move)
 
